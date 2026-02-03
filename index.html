@@ -94,21 +94,8 @@
             height: 8px;
             border-radius: 50%;
             background: var(--accent-red);
-            animation: pulse 2s infinite;
         }
-        .status-dot.connected { 
-            background: var(--accent-green);
-            animation: none;
-        }
-        @keyframes pulse {
-            0%, 100% { opacity: 1; }
-            50% { opacity: 0.5; }
-        }
-        .ping-indicator {
-            font-size: 0.65rem;
-            color: var(--text-muted);
-            margin-left: 5px;
-        }
+        .status-dot.connected { background: var(--accent-green); }
         .container { padding: 15px; }
         .tabs { display: flex; gap: 5px; margin-bottom: 15px; }
         .tab {
@@ -303,7 +290,6 @@
         .log-entry.success { color: var(--accent-green); }
         .log-entry.error { color: var(--accent-red); }
         .log-entry.warning { color: var(--accent-yellow); }
-        .log-entry.debug { color: #888; }
         .empty { text-align: center; color: var(--text-muted); padding: 20px; }
         .remember-me {
             display: flex;
@@ -330,7 +316,6 @@
         <div class="connection-status">
             <div class="status-dot" id="statusDot"></div>
             <span id="statusText">Offline</span>
-            <span class="ping-indicator" id="pingIndicator"></span>
         </div>
     </header>
 
@@ -577,23 +562,12 @@
         currentCycle: 1,
         tickDelayCounter: 0,
         
-        // LDP detection counters
+        // LDP tespiti için sayaçlar
         digitAppearances: [0,0,0,0,0,0,0,0,0,0],
         digitLastSeenIndex: [-1,-1,-1,-1,-1,-1,-1,-1,-1,-1],
         firstLdpFound: false,
         secondLdpFound: false,
         analysisStartIndex: 0,
-        
-        // Performance optimization
-        resultTimeout: null,
-        balanceRefreshTimeout: null,
-        contractStartTime: null,
-        lastPingTime: 0,
-        pingInterval: null,
-        reconnectAttempts: 0,
-        maxReconnectAttempts: 3,
-        messageQueue: [],
-        isProcessingResult: false,
         
         init: function() {
             this.initDigitStats();
@@ -601,7 +575,7 @@
             this.martin = this.money;
             this.loadTheme();
             this.loadRememberedToken();
-            this.log('Bot ready (Optimized v2.0)', 'success');
+            this.log('Bot ready', 'info');
         },
         
         initDigitStats: function() {
@@ -709,144 +683,72 @@
             var token = document.getElementById('apiToken').value;
             if (!token) { alert('Enter API Token!'); return; }
             
-            this.log('Connecting to Deriv...', 'info');
+            this.log('Connecting...', 'info');
             this.ws = new WebSocket('wss://ws.derivws.com/websockets/v3?app_id=1089');
             
             this.ws.onopen = function() {
-                self.log('WebSocket connected', 'debug');
                 self.send({ authorize: token });
-                self.startPingMonitor();
             };
             
             this.ws.onmessage = function(e) {
-                var data = JSON.parse(e.data);
-                self.logApiMessage(data);
-                self.handle(data);
-            };
-            
-            this.ws.onerror = function(error) {
-                self.log('WebSocket error: ' + error, 'error');
+                self.handle(JSON.parse(e.data));
             };
             
             this.ws.onclose = function() {
-                self.log('Disconnected from Deriv', 'warning');
-                self.handleDisconnection();
+                self.log('Disconnected', 'warning');
+                self.isConnected = false;
+                document.getElementById('statusDot').classList.remove('connected');
+                document.getElementById('statusText').textContent = 'Offline';
+                var btn = document.getElementById('btnConnect');
+                btn.textContent = '🔌 CONNECT';
+                btn.className = 'btn btn-connect';
             };
         },
         
         disconnect: function() {
             if (this.ws) {
-                this.stopPingMonitor();
                 this.ws.close();
                 this.isConnected = false;
                 this.log('Manually disconnected', 'warning');
             }
         },
         
-        handleDisconnection: function() {
-            this.isConnected = false;
-            this.stopPingMonitor();
-            
-            document.getElementById('statusDot').classList.remove('connected');
-            document.getElementById('statusText').textContent = 'Offline';
-            document.getElementById('pingIndicator').textContent = '';
-            
-            var btn = document.getElementById('btnConnect');
-            btn.textContent = '🔌 CONNECT';
-            btn.className = 'btn btn-connect';
-            
-            // Auto-reconnect if trading was active
-            if (this.isRunning && this.reconnectAttempts < this.maxReconnectAttempts) {
-                this.reconnectAttempts++;
-                var self = this;
-                this.log('Auto-reconnect attempt ' + this.reconnectAttempts + '/' + this.maxReconnectAttempts, 'warning');
-                setTimeout(function() {
-                    self.connect();
-                }, 3000);
-            } else {
-                this.reconnectAttempts = 0;
-            }
-        },
-        
-        startPingMonitor: function() {
-            var self = this;
-            this.pingInterval = setInterval(function() {
-                if (self.isConnected) {
-                    self.send({ ping: 1 });
-                    self.lastPingTime = Date.now();
-                }
-            }, 30000); // Ping every 30 seconds
-        },
-        
-        stopPingMonitor: function() {
-            if (this.pingInterval) {
-                clearInterval(this.pingInterval);
-                this.pingInterval = null;
-            }
-        },
-        
         send: function(d) {
-            if (this.ws && this.ws.readyState === 1) {
-                this.ws.send(JSON.stringify(d));
-            } else {
-                this.log('Cannot send: WebSocket not ready', 'error');
-            }
-        },
-        
-        logApiMessage: function(d) {
-            var msgType = d.msg_type;
-            var timestamp = new Date().toISOString().split('T')[1].substring(0, 12);
-            
-            if (msgType === 'tick') return; // Don't log every tick
-            
-            if (msgType === 'authorize') {
-                this.log('[' + timestamp + '] API: authorize OK', 'debug');
-            } else if (msgType === 'balance') {
-                this.log('[' + timestamp + '] API: balance $' + parseFloat(d.balance.balance).toFixed(2), 'debug');
-            } else if (msgType === 'buy') {
-                this.log('[' + timestamp + '] API: contract opened #' + d.buy.contract_id, 'debug');
-            } else if (msgType === 'proposal_open_contract') {
-                var status = d.proposal_open_contract.status;
-                this.log('[' + timestamp + '] API: contract status=' + status, 'debug');
-            } else if (msgType === 'pong') {
-                var latency = Date.now() - this.lastPingTime;
-                document.getElementById('pingIndicator').textContent = latency + 'ms';
-            }
+            if (this.ws && this.ws.readyState === 1) this.ws.send(JSON.stringify(d));
         },
         
         handle: function(d) {
             if (d.error) {
-                this.log('API Error: ' + d.error.message, 'error');
-                
-                // Handle specific errors
-                if (d.error.code === 'InvalidToken') {
-                    this.disconnect();
-                    alert('Invalid API Token! Please check and reconnect.');
-                }
+                this.log('Error: ' + d.error.message, 'error');
                 return;
             }
             
             if (d.msg_type === 'authorize' && d.authorize) {
-                this.log('Authorized: ' + d.authorize.email, 'success');
+                this.log('Connected: ' + d.authorize.email, 'success');
                 this.isConnected = true;
-                this.reconnectAttempts = 0;
-                
                 document.getElementById('statusDot').classList.add('connected');
                 document.getElementById('statusText').textContent = 'Online';
                 document.getElementById('btnStart').disabled = false;
-                
                 var btn = document.getElementById('btnConnect');
                 btn.textContent = '🔌 DISCONNECT';
                 btn.className = 'btn btn-disconnect';
-                
                 this.send({ balance: 1, subscribe: 1 });
                 this.subscribe();
-                
                 document.querySelector('.tab[data-tab="trading"]').click();
             }
             
             if (d.msg_type === 'balance' && d.balance) {
-                this.updateBalance(parseFloat(d.balance.balance));
+                this.equ = parseFloat(d.balance.balance);
+                if (this.bln === 0) {
+                    this.bln = this.equ;
+                    this.old = this.bln;
+                    document.getElementById('startBalance').textContent = '$' + this.bln.toFixed(2);
+                }
+                document.getElementById('balance').textContent = '$' + this.equ.toFixed(2);
+                this.sum = parseFloat((this.equ - this.bln).toFixed(2));
+                var el = document.getElementById('profitLoss');
+                el.textContent = '$' + (this.sum >= 0 ? '+' : '') + this.sum.toFixed(2);
+                el.className = 'stat-value ' + (this.sum >= 0 ? 'profit' : 'loss');
             }
             
             if (d.msg_type === 'tick' && d.tick) {
@@ -857,223 +759,21 @@
                 var self = this;
                 this.tickHistory = d.history.prices.map(function(p) { return self.getDigit(parseFloat(p)); });
                 this.updatePct();
-                this.log(this.tickHistory.length + ' historical ticks loaded', 'info');
+                this.log(this.tickHistory.length + ' ticks loaded', 'info');
             }
             
             if (d.msg_type === 'buy' && d.buy) {
-                this.onContractOpened(d.buy);
+                this.contractId = d.buy.contract_id;
+                this.activeContract = d.buy;
+                this.log('Contract #' + this.contractId + ' opened', 'info');
+                this.showResult('Running...', 'waiting');
+                this.send({ proposal_open_contract: 1, contract_id: this.contractId, subscribe: 1 });
             }
             
             if (d.msg_type === 'proposal_open_contract' && d.proposal_open_contract) {
-                this.onContractUpdate(d.proposal_open_contract);
-            }
-        },
-        
-        updateBalance: function(newBalance) {
-            this.equ = newBalance;
-            
-            if (this.bln === 0) {
-                this.bln = this.equ;
-                this.old = this.bln;
-                document.getElementById('startBalance').textContent = '$' + this.bln.toFixed(2);
-            }
-            
-            document.getElementById('balance').textContent = '$' + this.equ.toFixed(2);
-            
-            this.sum = parseFloat((this.equ - this.bln).toFixed(2));
-            var el = document.getElementById('profitLoss');
-            el.textContent = '$' + (this.sum >= 0 ? '+' : '') + this.sum.toFixed(2);
-            el.className = 'stat-value ' + (this.sum >= 0 ? 'profit' : 'loss');
-        },
-        
-        onContractOpened: function(buyData) {
-            this.contractId = buyData.contract_id;
-            this.activeContract = buyData;
-            this.contractStartTime = Date.now();
-            
-            this.log('Contract opened #' + this.contractId, 'info');
-            this.showResult('Contract running...', 'waiting');
-            
-            // Subscribe to contract updates
-            this.send({ proposal_open_contract: 1, contract_id: this.contractId, subscribe: 1 });
-            
-            // Set timeout for contract result (max 30 seconds)
-            var self = this;
-            this.resultTimeout = setTimeout(function() {
-                if (self.activeContract && !self.isProcessingResult) {
-                    self.log('Contract timeout! Requesting update...', 'warning');
-                    self.send({ proposal_open_contract: 1, contract_id: self.contractId });
-                    
-                    // Force balance refresh
-                    self.send({ balance: 1 });
-                }
-            }, 30000);
-        },
-        
-        onContractUpdate: function(contract) {
-            // Only process if contract is settled
-            if (contract.is_sold || contract.status === 'won' || contract.status === 'lost') {
-                if (!this.isProcessingResult) {
-                    this.processContractResult(contract);
-                }
-            }
-        },
-        
-        processContractResult: function(contract) {
-            // Prevent duplicate processing
-            if (this.isProcessingResult) {
-                this.log('Already processing result, skipping duplicate', 'debug');
-                return;
-            }
-            
-            this.isProcessingResult = true;
-            
-            // Clear timeout
-            if (this.resultTimeout) {
-                clearTimeout(this.resultTimeout);
-                this.resultTimeout = null;
-            }
-            
-            // Unsubscribe from contract updates
-            this.send({ forget_all: 'proposal_open_contract' });
-            
-            var profit = parseFloat(contract.profit || 0);
-            var isWin = profit > 0;
-            var durationTicks = (this.currentCycle === 1) ? 5 : 4;
-            var contractDuration = Date.now() - this.contractStartTime;
-            
-            this.log('Contract settled in ' + (contractDuration / 1000).toFixed(2) + 's', 'debug');
-            
-            // IMMEDIATE UI updates
-            if (isWin) {
-                this.winCount++;
-                this.m = 0;
-                this.martin = this.money;
-                this.log('✓ WIN C' + this.currentCycle + ' (' + durationTicks + ' ticks) +$' + profit.toFixed(2), 'success');
-                this.showResult('✓ WIN C' + this.currentCycle + ' (' + durationTicks + ' ticks) +$' + profit.toFixed(2), 'won');
-            } else {
-                this.lossCount++;
-                this.m = 1;
-                this.martin = parseFloat((this.martin * this.marti).toFixed(2));
-                this.log('✗ LOSS C' + this.currentCycle + ' (' + durationTicks + ' ticks) -$' + Math.abs(profit).toFixed(2), 'error');
-                this.showResult('✗ LOSS C' + this.currentCycle + ' (' + durationTicks + ' ticks) -$' + Math.abs(profit).toFixed(2), 'lost');
-            }
-            
-            // IMMEDIATE stats update
-            document.getElementById('winCount').textContent = this.winCount;
-            document.getElementById('lossCount').textContent = this.lossCount;
-            
-            // Force balance refresh
-            var self = this;
-            this.send({ balance: 1 });
-            
-            // Double-check balance after 2 seconds
-            setTimeout(function() {
-                self.send({ balance: 1 });
-            }, 2000);
-            
-            // Add to trade history
-            this.tradeHistory.unshift({ 
-                digit: this.ldp, 
-                stake: this.pendingStake, 
-                profit: profit, 
-                isWin: isWin, 
-                time: new Date().toLocaleTimeString(), 
-                cycle: this.currentCycle,
-                ticks: durationTicks,
-                result: isWin ? 'WON' : 'LOST',
-                duration: (contractDuration / 1000).toFixed(2) + 's'
-            });
-            this.renderTrades();
-            
-            // Check stop loss / take profit
-            if (this.sum >= this.profit) {
-                this.log('🎯 TARGET PROFIT +$' + this.sum.toFixed(2) + ' REACHED!', 'success');
-                this.stopTrading();
-                alert('🎯 Target Profit Reached: +$' + this.sum.toFixed(2));
-                this.isProcessingResult = false;
-                return;
-            }
-            if (this.sum <= -this.loss) {
-                this.log('🛑 STOP LOSS -$' + Math.abs(this.sum).toFixed(2) + ' REACHED!', 'error');
-                this.stopTrading();
-                alert('🛑 Stop Loss Reached: -$' + Math.abs(this.sum).toFixed(2));
-                this.isProcessingResult = false;
-                return;
-            }
-            
-            // Reset contract state
-            this.activeContract = null;
-            this.contractId = null;
-            this.contractStartTime = null;
-            
-            // Continue trading logic
-            var self = this;
-            setTimeout(function() {
-                self.isProcessingResult = false;
-                self.continueAfterResult(isWin);
-            }, 1000); // Small delay for UI update
-        },
-        
-        continueAfterResult: function(isWin) {
-            if (!this.isRunning) return;
-            
-            if (isWin) {
-                this.hideResult();
-                this.startAnalysis();
-            } else {
-                if (this.currentCycle === 1) {
-                    this.currentCycle = 2;
-                    
-                    if (this.targetDigits.length === 2) {
-                        this.ldp = this.secondaryLdp;
-                        document.getElementById('signalDigit').textContent = this.ldp;
-                        document.getElementById('signalInfo').textContent = '2 FRAMES | C2 | 4 ticks';
-                        this.log('2 FRAMES: Cycle 1 lost → Cycle 2 (4 ticks) SECONDARY ' + this.ldp, 'warning');
-                        
-                        this.hideResult();
-                        this.executeTrade();
-                    } else if (this.targetDigits.length > 2) {
-                        if (this.secondLdpDetected && this.secondaryLdp !== null) {
-                            this.ldp = this.secondaryLdp;
-                            document.getElementById('signalDigit').textContent = this.ldp;
-                            document.getElementById('signalInfo').textContent = '3+ FRAMES | C2 | 4 ticks';
-                            this.log('3+ FRAMES: Cycle 1 lost → Cycle 2 (4 ticks) SECONDARY ' + this.ldp, 'warning');
-                            
-                            this.hideResult();
-                            this.executeTrade();
-                        } else {
-                            var maxPct = 0;
-                            var maxDigit = null;
-                            for (var i = 0; i < this.targetDigits.length; i++) {
-                                var digit = this.targetDigits[i];
-                                if (digit !== this.firstTwoOccurrence && this.per[digit] > maxPct) {
-                                    maxPct = this.per[digit];
-                                    maxDigit = digit;
-                                }
-                            }
-                            if (maxDigit !== null) {
-                                this.ldp = maxDigit;
-                                document.getElementById('signalDigit').textContent = this.ldp;
-                                document.getElementById('signalInfo').textContent = '3+ FRAMES | C2 | 4 ticks';
-                                this.log('3+ FRAMES: Cycle 1 lost → Cycle 2 (4 ticks) HIGHEST % ' + this.ldp, 'warning');
-                                
-                                this.hideResult();
-                                this.executeTrade();
-                            } else {
-                                this.log('No suitable digit for Cycle 2, restarting analysis', 'warning');
-                                this.hideResult();
-                                this.startAnalysis();
-                            }
-                        }
-                    } else {
-                        this.log('Invalid frame count, restarting analysis', 'warning');
-                        this.hideResult();
-                        this.startAnalysis();
-                    }
-                } else if (this.currentCycle === 2) {
-                    this.hideResult();
-                    this.startAnalysis();
+                var c = d.proposal_open_contract;
+                if (c.is_sold || c.status === 'won' || c.status === 'lost') {
+                    this.onResult(c);
                 }
             }
         },
@@ -1099,7 +799,9 @@
             this.updatePct();
             this.highlightDigit(digit);
             
+            // Analiz sırasında ve son rakam targetDigits içindeyse sayaç artır
             if (this.isRunning && this.isAnalyzing && !this.activeContract) {
+                // Son rakamın targetDigits içinde olup olmadığını kontrol et
                 var isTargetDigit = false;
                 for (var i = 0; i < this.targetDigits.length; i++) {
                     if (this.targetDigits[i] === digit) {
@@ -1112,10 +814,12 @@
                     this.digitAppearances[digit]++;
                     this.digitLastSeenIndex[digit] = currentTickIndex;
                     
+                    // Görsel feedback
                     var el = document.getElementById('digit-' + digit);
                     el.classList.add('rising');
                     setTimeout(function() { el.classList.remove('rising'); }, 500);
                     
+                    // İlk 2 kez görünen sayıyı bul (CYCLE 1)
                     if (!this.firstLdpFound && this.digitAppearances[digit] >= 2) {
                         this.firstTwoOccurrence = digit;
                         this.ldp = digit;
@@ -1125,13 +829,15 @@
                         document.getElementById('signalDigit').textContent = digit;
                         document.getElementById('signalInfo').textContent = 'LDP:' + this.digitAppearances[digit] + ' | ' + this.per[digit].toFixed(1) + '% | 5 ticks';
                         document.getElementById('infoState').textContent = 'Trading';
-                        this.tickDelayCounter = 0;
+                        this.tickDelayCounter = 0; // ANINDA işlem aç
                         
                         el.classList.add('active');
                         this.log('PRIMARY ' + digit + ' detected (2 appearances)', 'success');
                         
+                        // ANINDA işlem aç
                         this.executeTrade();
                         
+                        // 2 FRAMES durumu için secondary'yi ayarla
                         if (this.targetDigits.length === 2) {
                             for (var s = 0; s < this.targetDigits.length; s++) {
                                 if (this.targetDigits[s] !== digit) {
@@ -1144,6 +850,7 @@
                             }
                         }
                     }
+                    // İkinci 2 kez görünen sayıyı bul (CYCLE 2) - sadece 3+ frames için
                     else if (this.firstLdpFound && !this.secondLdpFound && this.targetDigits.length > 2 && 
                              digit !== this.firstTwoOccurrence && this.digitAppearances[digit] >= 2) {
                         this.secondTwoOccurrence = digit;
@@ -1154,6 +861,7 @@
                     }
                 }
                 
+                // 3+ frames ve secondary hala bulunamadıysa, en yüksek yüzdeye sahip olanı seç
                 if (this.firstLdpFound && this.targetDigits.length > 2 && !this.secondLdpDetected) {
                     var maxPct = 0;
                     var maxDigit = null;
@@ -1213,6 +921,7 @@
                         this.targetDigits.push(j);
                     }
                 } else {
+                    // digitPercent 0 ise tüm sayılar target
                     this.targetDigits.push(j);
                 }
             }
@@ -1221,8 +930,8 @@
         startAnalysis: function() {
             for (var i = 0; i < 10; i++) {
                 this.perPrev[i] = this.per[i];
-                this.digitAppearances[i] = 0;
-                this.digitLastSeenIndex[i] = -1;
+                this.digitAppearances[i] = 0; // Sayaçları sıfırla
+                this.digitLastSeenIndex[i] = -1; // Son görülme indexini sıfırla
                 document.getElementById('digit-' + i).classList.remove('active', 'rising', 'falling');
             }
             this.ldp = null;
@@ -1245,12 +954,7 @@
         
         executeTrade: function() {
             if (!this.isRunning || this.ldp === null) {
-                this.log('Cannot execute: LDP null or bot stopped', 'error');
-                return;
-            }
-            
-            if (this.activeContract) {
-                this.log('Cannot execute: Active contract in progress', 'warning');
+                this.log('Cannot execute trade: LDP is null or bot not running', 'error');
                 return;
             }
             
@@ -1262,7 +966,7 @@
             if (!this.isRunning || this.ldp === null) return;
             
             if (this.currentBet >= this.r && this.r > 0) {
-                this.log('Round completed', 'info');
+                this.log('Round done', 'info');
                 this.startAnalysis();
                 return;
             }
@@ -1271,12 +975,13 @@
             var stake = (this.m === 0) ? this.money : this.martin;
             this.pendingStake = stake;
             
+            // Cycle'a göre tik sayısı: Cycle 1 -> 5, Cycle 2 -> 4
             var durationTicks = (this.currentCycle === 1) ? 5 : 4;
             
             document.getElementById('signalStatus').textContent = 'Cycle ' + this.currentCycle + ' | Bet ' + this.currentBet + '/' + (this.r > 0 ? this.r : '∞') + ' | $' + stake.toFixed(2) + ' | ' + durationTicks + ' ticks';
-            this.showResult('Opening contract...', 'waiting');
+            this.showResult('Opening...', 'waiting');
             
-            this.log('📊 Buying: Digit ' + this.ldp + ' | $' + stake.toFixed(2) + ' | ' + durationTicks + ' ticks', 'info');
+            this.log('Buy: ' + this.ldp + ' | $' + stake.toFixed(2) + ' | ' + durationTicks + ' ticks', 'info');
             
             this.send({
                 buy: 1,
@@ -1294,6 +999,136 @@
             });
         },
         
+        onResult: function(c) {
+            this.send({ forget_all: 'proposal_open_contract' });
+            
+            var profit = parseFloat(c.profit || 0);
+            var isWin = profit > 0;
+            
+            var durationTicks = (this.currentCycle === 1) ? 5 : 4;
+            
+            // ANINDA sonuçları güncelle
+            if (isWin) {
+                this.winCount++;
+                this.m = 0;
+                this.martin = this.money;
+                this.log('WIN C' + this.currentCycle + ' (' + durationTicks + ' ticks) +$' + profit.toFixed(2), 'success');
+                this.showResult('WIN C' + this.currentCycle + ' (' + durationTicks + ' ticks) +$' + profit.toFixed(2), 'won');
+            } else {
+                this.lossCount++;
+                this.m = 1;
+                this.martin = parseFloat((this.martin * this.marti).toFixed(2));
+                this.log('LOSS C' + this.currentCycle + ' (' + durationTicks + ' ticks) -$' + Math.abs(profit).toFixed(2), 'error');
+                this.showResult('LOSS C' + this.currentCycle + ' (' + durationTicks + ' ticks) -$' + Math.abs(profit).toFixed(2), 'lost');
+            }
+            
+            // ANINDA P/L güncelle
+            this.sum = parseFloat((this.equ - this.bln).toFixed(2));
+            var el = document.getElementById('profitLoss');
+            el.textContent = '$' + (this.sum >= 0 ? '+' : '') + this.sum.toFixed(2);
+            el.className = 'stat-value ' + (this.sum >= 0 ? 'profit' : 'loss');
+            
+            // ANINDA wins/losses panellerini güncelle
+            document.getElementById('winCount').textContent = this.winCount;
+            document.getElementById('lossCount').textContent = this.lossCount;
+            
+            // Trade history'e ekle
+            this.tradeHistory.unshift({ 
+                digit: this.ldp, 
+                stake: this.pendingStake, 
+                profit: profit, 
+                isWin: isWin, 
+                time: new Date().toLocaleTimeString(), 
+                cycle: this.currentCycle,
+                ticks: durationTicks,
+                result: isWin ? 'WON' : 'LOST'
+            });
+            this.renderTrades();
+            
+            // Stop loss / Take profit kontrolü
+            if (this.sum >= this.profit) {
+                this.log('TARGET +$' + this.sum.toFixed(2) + ' reached', 'success');
+                this.stopTrading();
+                alert('Target: +$' + this.sum.toFixed(2));
+                return;
+            }
+            if (this.sum <= -this.loss) {
+                this.log('STOP LOSS -$' + Math.abs(this.sum).toFixed(2) + ' reached', 'error');
+                this.stopTrading();
+                alert('Stop Loss: -$' + Math.abs(this.sum).toFixed(2));
+                return;
+            }
+            
+            this.activeContract = null;
+            this.contractId = null;
+            
+            if (isWin) {
+                // Kazanıldığında analiz sıfırdan başlar
+                this.hideResult();
+                this.startAnalysis();
+            } else {
+                if (this.currentCycle === 1) {
+                    // Cycle 1 kaybetti, ANINDA Cycle 2'ye geç
+                    this.currentCycle = 2;
+                    
+                    if (this.targetDigits.length === 2) {
+                        this.ldp = this.secondaryLdp;
+                        document.getElementById('signalDigit').textContent = this.ldp;
+                        document.getElementById('signalInfo').textContent = '2 FRAMES | C2 | 4 ticks';
+                        this.log('2 FRAMES: Cycle 1 lost → Cycle 2 (4 ticks) SECONDARY ' + this.ldp, 'warning');
+                        
+                        // ANINDA Cycle 2 işlemini başlat
+                        this.hideResult();
+                        this.executeTrade();
+                    } else if (this.targetDigits.length > 2) {
+                        if (this.secondLdpDetected && this.secondaryLdp !== null) {
+                            this.ldp = this.secondaryLdp;
+                            document.getElementById('signalDigit').textContent = this.ldp;
+                            document.getElementById('signalInfo').textContent = '3+ FRAMES | C2 | 4 ticks';
+                            this.log('3+ FRAMES: Cycle 1 lost → Cycle 2 (4 ticks) SECONDARY ' + this.ldp, 'warning');
+                            
+                            // ANINDA Cycle 2 işlemini başlat
+                            this.hideResult();
+                            this.executeTrade();
+                        } else {
+                            // En yüksek yüzdeye sahip sayıyı bul
+                            var maxPct = 0;
+                            var maxDigit = null;
+                            for (var i = 0; i < this.targetDigits.length; i++) {
+                                var digit = this.targetDigits[i];
+                                if (digit !== this.firstTwoOccurrence && this.per[digit] > maxPct) {
+                                    maxPct = this.per[digit];
+                                    maxDigit = digit;
+                                }
+                            }
+                            if (maxDigit !== null) {
+                                this.ldp = maxDigit;
+                                document.getElementById('signalDigit').textContent = this.ldp;
+                                document.getElementById('signalInfo').textContent = '3+ FRAMES | C2 | 4 ticks';
+                                this.log('3+ FRAMES: Cycle 1 lost → Cycle 2 (4 ticks) HIGHEST % ' + this.ldp, 'warning');
+                                
+                                // ANINDA Cycle 2 işlemini başlat
+                                this.hideResult();
+                                this.executeTrade();
+                            } else {
+                                this.log('No suitable digit for Cycle 2, restarting analysis', 'warning');
+                                this.hideResult();
+                                this.startAnalysis();
+                            }
+                        }
+                    } else {
+                        this.log('Invalid frame count, restarting analysis', 'warning');
+                        this.hideResult();
+                        this.startAnalysis();
+                    }
+                } else if (this.currentCycle === 2) {
+                    // Cycle 2 kaybetti, analizi yeniden başlat
+                    this.hideResult();
+                    this.startAnalysis();
+                }
+            }
+        },
+        
         showResult: function(text, type) {
             var el = document.getElementById('resultBox');
             el.textContent = text;
@@ -1301,9 +1136,7 @@
         },
         
         hideResult: function() {
-            var el = document.getElementById('resultBox');
-            el.className = 'result-box';
-            el.textContent = '';
+            document.getElementById('resultBox').className = 'result-box';
         },
         
         subscribe: function() {
@@ -1322,7 +1155,7 @@
             this.martin = this.money;
             document.getElementById('btnStart').style.display = 'none';
             document.getElementById('btnStop').style.display = 'block';
-            this.log('🚀 Trading started', 'success');
+            this.log('Trading started', 'success');
             this.startAnalysis();
         },
         
@@ -1331,29 +1164,24 @@
             this.isAnalyzing = false;
             this.activeContract = null;
             this.tickDelayCounter = 0;
-            this.isProcessingResult = false;
-            
-            if (this.resultTimeout) {
-                clearTimeout(this.resultTimeout);
-                this.resultTimeout = null;
-            }
-            
             document.getElementById('btnStart').style.display = 'block';
             document.getElementById('btnStop').style.display = 'none';
             document.getElementById('infoState').textContent = 'Stopped';
             this.hideResult();
-            this.log('⏹️ Trading stopped', 'warning');
+            this.log('Trading stopped', 'warning');
         },
         
         resetAll: function() {
             if (!confirm('Reset all data? This will clear trades, logs and P/L.')) return;
             
-            this.bln = this.equ;
+            // P/L sıfırla
+            this.bln = this.equ; // Başlangıç bakiyesini mevcut bakiyeye eşitle
             this.sum = 0;
             document.getElementById('startBalance').textContent = '$' + this.bln.toFixed(2);
             document.getElementById('profitLoss').textContent = '$0.00';
             document.getElementById('profitLoss').className = 'stat-value profit';
             
+            // Diğer sıfırlamalar
             this.winCount = 0;
             this.lossCount = 0;
             this.tradeHistory = [];
@@ -1371,12 +1199,14 @@
             this.r = 0;
             this.digitPercent = 0;
             
+            // LDP sayaçlarını sıfırla
             this.digitAppearances = [0,0,0,0,0,0,0,0,0,0];
             this.digitLastSeenIndex = [-1,-1,-1,-1,-1,-1,-1,-1,-1,-1];
             this.firstLdpFound = false;
             this.secondLdpFound = false;
             this.analysisStartIndex = 0;
             
+            // UI güncellemeleri
             document.getElementById('winCount').textContent = '0';
             document.getElementById('lossCount').textContent = '0';
             document.getElementById('signalDigit').textContent = '-';
@@ -1391,26 +1221,19 @@
             
             this.renderTrades();
             this.updatePct();
-            this.log('🔄 System reset (All data cleared)', 'warning');
+            this.log('System reset (P/L cleared)', 'warning');
             
+            // Trading'i durdur
             this.stopTrading();
         },
         
         renderTrades: function() {
             var c = document.getElementById('tradeList');
-            if (!this.tradeHistory.length) { 
-                c.innerHTML = '<div class="empty">No trades yet</div>'; 
-                return; 
-            }
+            if (!this.tradeHistory.length) { c.innerHTML = '<div class="empty">No trades</div>'; return; }
             var h = '';
-            for (var i = 0; i < Math.min(this.tradeHistory.length, 50); i++) {
+            for (var i = 0; i < this.tradeHistory.length; i++) {
                 var t = this.tradeHistory[i];
-                h += '<div class="trade-item ' + (t.isWin ? 'win' : 'loss') + '">';
-                h += '<div>C' + t.cycle + ' (' + t.ticks + ' ticks) | Digit ' + t.digit;
-                h += '<br><small>' + t.time + ' | ' + t.duration + '</small></div>';
-                h += '<div class="trade-result ' + (t.isWin ? 'win' : 'loss') + '">';
-                h += t.result + '<br>' + (t.isWin ? '+' : '') + '$' + t.profit.toFixed(2);
-                h += '</div></div>';
+                h += '<div class="trade-item ' + (t.isWin ? 'win' : 'loss') + '"><div>C' + t.cycle + ' (' + t.ticks + ' ticks) | Digit ' + t.digit + '<br><small>' + t.time + '</small></div><div class="trade-result ' + (t.isWin ? 'win' : 'loss') + '">' + t.result + '<br>' + (t.isWin ? '+' : '') + '$' + t.profit.toFixed(2) + '</div></div>';
             }
             c.innerHTML = h;
         },
@@ -1419,15 +1242,9 @@
             var box = document.getElementById('logBox');
             var entry = document.createElement('div');
             entry.className = 'log-entry ' + (type || 'info');
-            var time = new Date().toLocaleTimeString();
-            entry.innerHTML = '<span class="time">[' + time + ']</span> ' + msg;
+            entry.innerHTML = '<span class="time">[' + new Date().toLocaleTimeString() + ']</span> ' + msg;
             box.appendChild(entry);
             box.scrollTop = box.scrollHeight;
-            
-            // Console log for debugging
-            if (type === 'error') console.error('[' + time + '] ' + msg);
-            else if (type === 'warning') console.warn('[' + time + '] ' + msg);
-            else if (type === 'debug') console.log('[' + time + '] ' + msg);
         }
     };
 
