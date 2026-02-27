@@ -203,7 +203,14 @@
             margin-bottom: 15px;
         }
         .price-label { font-size: 0.7rem; color: var(--text-secondary); }
-        .price-value { font-size: 1.5rem; font-weight: 700; color: var(--accent-cyan); }
+        .price-value {
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: var(--accent-cyan);
+            transition: color 0.2s ease;
+        }
+        .price-value.up { color: var(--accent-cyan); }   /* yükselişte mavi (zaten aynı) */
+        .price-value.down { color: var(--accent-red); }  /* düşüşte kırmızı */
         .price-digit {
             display: inline-block;
             background: var(--accent-magenta);
@@ -211,7 +218,10 @@
             border-radius: 6px;
             margin-left: 10px;
             font-size: 1.2rem;
+            transition: background 0.2s ease;
         }
+        .price-digit.up { background: var(--accent-cyan); }   /* yükselişte mavi */
+        .price-digit.down { background: var(--accent-red); } /* düşüşte kırmızı */
         .digit-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; }
         .digit-item {
             background: var(--bg-secondary);
@@ -569,6 +579,9 @@
         secondLdpFound: false,
         analysisStartIndex: 0,
         
+        // Bir önceki fiyatı saklamak için
+        lastPrice: null,
+        
         init: function() {
             this.initDigitStats();
             this.bindEvents();
@@ -788,8 +801,29 @@
             var digit = this.getDigit(price);
             var currentTickIndex = this.tickHistory.length;
             
-            document.getElementById('currentPrice').textContent = price.toFixed(this.pipSize);
-            document.getElementById('lastDigit').textContent = digit;
+            // Fiyatı göster
+            var priceEl = document.getElementById('currentPrice');
+            priceEl.textContent = price.toFixed(this.pipSize);
+            
+            // Son rakamı göster
+            var digitEl = document.getElementById('lastDigit');
+            digitEl.textContent = digit;
+            
+            // --- YENİ: Fiyat değişimine göre renklendirme (hem fiyat hem son rakam) ---
+            priceEl.classList.remove('up', 'down');
+            digitEl.classList.remove('up', 'down');
+            if (this.lastPrice !== null) {
+                if (price > this.lastPrice) {
+                    priceEl.classList.add('up');
+                    digitEl.classList.add('up');
+                } else if (price < this.lastPrice) {
+                    priceEl.classList.add('down');
+                    digitEl.classList.add('down');
+                }
+                // eşitse ek sınıf yok, varsayılan renkler kalır
+            }
+            this.lastPrice = price;
+            // ------------------------------------------------
             
             this.tickHistory.push(digit);
             if (this.tickHistory.length > this.tck) this.tickHistory.shift();
