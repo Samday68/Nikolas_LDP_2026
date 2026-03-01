@@ -973,7 +973,19 @@ var BOT = {
         }
     },
     
+    autoSetCycles: function() {
+        var frames = this.targetDigits.length;
+        if (frames <= 0) frames = 10; // digitPercent=0 → tüm sayılar, en az 1 döngü
+        var autoCycles = Math.min(frames, 3); // max 3 döngü
+        this.c = autoCycles;
+        this.r = autoCycles;
+        document.getElementById('analysisCycle').value = this.c;
+        document.getElementById('betRepeat').value = this.r;
+        document.getElementById('infoCycle').textContent = this.c;
+    },
+
     startAnalysis: function() {
+        this.autoSetCycles(); // döngüleri otomatik belirle
         for (var i = 0; i < 10; i++) {
             this.perPrev[i] = this.per[i];
             this.digitAppearances[i] = 0;
@@ -995,7 +1007,7 @@ var BOT = {
         document.getElementById('signalDigit').textContent = '-';
         document.getElementById('signalInfo').textContent = 'Analyzing...';
         document.getElementById('signalStatus').textContent = 'Waiting for LDP detection';
-        this.log('Analysis started. Target digits: ' + this.targetDigits.join(', '), 'info');
+        this.log('Analysis started. Frames:' + this.targetDigits.length + ' → c=' + this.c + ' r=' + this.r + ' | Digits: ' + this.targetDigits.join(', '), 'info');
     },
     
     executeTrade: function() {
